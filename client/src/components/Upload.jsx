@@ -46,11 +46,20 @@ const Upload = () => {
   };
 
   return (
-    <div>
+    <div className="upload-container">
       <input type="file" accept=".pdf" onChange={handleFileChange} />
       {file && <p>Selected file: {file.name}</p>}
       <button onClick={handleUpload}>Upload</button>
-      <p>{message}</p>
+      <p
+        className={
+          message === "Please select a PDF file." ||
+          message === "Error uploading document"
+            ? "error"
+            : "message"
+        }
+      >
+        {message}
+      </p>
     </div>
   );
 };

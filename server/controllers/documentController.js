@@ -1,7 +1,12 @@
 const Document = require("../models/Document");
-const pdfParse = require("pdf-parse");
 const fs = require("fs");
+const pdfParser = require("pdf-parse");
+const parser = new pdfParser();
 const axios = require("axios");
+const Conversations = require("../models/Conversations");
+const { MongoClient, ObjectId } = require("mongodb");
+require("dotenv").config();
+const client = new MongoClient(process.env.MONGO_URI);
 
 const getVectorRepresentation = async (text) => {
   try {
@@ -37,35 +42,125 @@ const uploadDocument = async (req, res) => {
     }
 
     const pdfData = fs.readFileSync(file.path);
-    const data = await pdfParse(pdfData);
 
-    const chunks = chunkIt(data.text);
-    const documents = await Promise.all(
-      chunks.map(async (chunk) => {
-        const vector = await getVectorRepresentation(chunk);
-        const document = new Document({
-          text: chunk,
-          vector,
-        });
-        await document.save();
-        return document;
-      })
-    );
+    parser.on("pdfParser_dataError", (errData) => {
+      console.error(errData.parserError);
+      throw new Error("Error parsing PDF");
+    });
 
-    res.status(201).json(documents);
+    parser.on("pdfParser_dataReady", async (pdfData) => {
+      const text = parser.getRawTextContent();
+
+      const chunks = chunkIt(text);
+
+      const validChunks = chunks.filter((chunk) => chunk.trim() !== "");
+
+      const documents = await Promise.all(
+        validChunks.map(async (chunk) => {
+          const vector = await getVectorRepresentation(chunk);
+          const document = new Document({ text: chunk, vector });
+          return document.save();
+        })
+      );
+
+      fs.unlinkSync(file.path);
+
+      res.status(201).json(documents);
+    });
+
+    parser.parseBuffer(pdfData);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: error.message });
   }
 };
 
-const generateResponse = async (req, res) => {
-  console.log(req.body);
-  const { query } = req.body;
+const getQueryDocs = async (query, sessionId) => {
   try {
-    const documents = await Document.find({});
+    await client.connect();
 
-    const combinedVectors = documents.map((doc) => doc.vector);
+    const database = client.db("RAG");
+    const sessionsCollection = database.collection("Sessions");
+    const conversationsCollection = database.collection("Conversations");
+    const documentsCollection = database.collection("documents");
+
+    let existingConversations;
+    let session;
+
+    if (!sessionId || !ObjectId.isValid(sessionId)) {
+      session = await sessionsCollection.insertOne({});
+      sessionId = session.insertedId;
+    } else {
+      session = await sessionsCollection.findOne({
+        _id: new ObjectId(sessionId),
+      });
+      if (!session) {
+        throw new Error("Session not found");
+      }
+    }
+
+    existingConversations = await conversationsCollection
+      .find({ sessionId: new ObjectId(sessionId) })
+      .toArray();
+
+    const conversation = {
+      sessionId: new ObjectId(sessionId),
+      message: query,
+      role: "user",
+      createdAt: new Date(),
+    };
+    await conversationsCollection.insertOne(conversation);
+
+    const vector = await getVectorRepresentation(query);
+    console.log("vector", vector);
+
+    const docs = await documentsCollection
+      .aggregate([
+        {
+          $vectorSearch: {
+            index: "default",
+            path: "vector",
+            queryVector: vector,
+            numCandidates: 13,
+            limit: 10,
+          },
+        },
+        {
+          $project: {
+            _id: 0,
+            text: 1,
+            score: { $meta: "vectorSearchScore" },
+          },
+        },
+      ])
+      .toArray();
+
+    console.log("docs", docs);
+
+    return { docs, existingConversations, sessionId };
+  } catch (error) {
+    console.error("Error in getQueryDocs:", error);
+    return { docs: [], existingConversations: [], sessionId: null };
+  } finally {
+    await client.close();
+  }
+};
+
+const generateResponse = async (req, res) => {
+  try {
+    const { query, sessionId } = req.body;
+
+    const {
+      docs,
+      existingConversations,
+      sessionId: newSessionId,
+    } = await getQueryDocs(query, sessionId);
+    console.log("existingConversations", existingConversations);
+    console.log("newSessionId", newSessionId);
+    const existingContent = `Based on the vector representations: \n${docs
+      .map((doc) => doc.text)
+      .join("\n")}\n and the following query: ${query}, provide an answer.`;
+    console.log("existingContent", existingContent);
 
     const response = await axios.post(
       "https://api.openai.com/v1/chat/completions",
@@ -77,11 +172,13 @@ const generateResponse = async (req, res) => {
             content:
               "You are a helpful assistant who answers questions based on the provided vectors and documents.",
           },
+          ...existingConversations.map((convo) => ({
+            role: convo.role,
+            content: convo.message,
+          })),
           {
             role: "user",
-            content: `Based on the vector representations ${JSON.stringify(
-              combinedVectors
-            )} and the following query: ${query}, provide an answer.`,
+            content: existingContent,
           },
         ],
         max_tokens: 150,
@@ -94,7 +191,15 @@ const generateResponse = async (req, res) => {
       }
     );
 
-    res.json(response.data.choices[0].message.content);
+    const assistantMessage = response.data.choices[0].message.content;
+    const conversation = new Conversations({
+      sessionId: newSessionId,
+      message: assistantMessage,
+      role: "assistant",
+    });
+    await conversation.save();
+
+    res.json(assistantMessage);
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: error.message });

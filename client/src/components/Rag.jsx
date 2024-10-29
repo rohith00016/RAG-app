@@ -3,38 +3,60 @@ import axios from "axios";
 
 const RAG = () => {
   const [query, setQuery] = useState("");
-  const [generatedResponse, setGeneratedResponse] = useState("");
+  const [messages, setMessages] = useState([]);
 
   const handleSearch = async () => {
-    if (!query) {
-      setGeneratedResponse("Please enter a query.");
-      return;
-    }
+    if (!query) return;
+
+    setMessages([...messages, { type: "user", text: query }]);
 
     try {
       const response = await axios.post("http://localhost:3000/api/generate", {
         query,
       });
 
-      setGeneratedResponse(response.data);
+      // Assuming the response has a structure like { success: true, data: "Response text" }
+      const responseText = response.data.data; // Adjust this based on the actual key
+
+      setMessages((prevMessages) => [
+        ...prevMessages,
+        { type: "system", text: responseText },
+      ]);
+      setQuery("");
     } catch (error) {
-      console.error("Error fetching documents or generating response", error);
-      setGeneratedResponse("Error fetching response");
+      console.error("Error fetching response", error);
+      setMessages((prevMessages) => [
+        ...prevMessages,
+        { type: "bot", text: "Error fetching response" },
+      ]);
     }
   };
 
   return (
-    <div>
-      <input
-        type="text"
-        value={query}
-        onChange={(e) => setQuery(e.target.value)}
-        placeholder="Ask a question"
-      />
-      <button onClick={handleSearch}>Search</button>
-      <div>
-        <h3>Generated Response:</h3>
-        <p>{generatedResponse}</p>
+    <div className="container">
+      <div className="chatContainer">
+        {messages.map((message, index) => (
+          <div
+            key={index}
+            className={`messageBubble ${
+              message.type === "user" ? "userMessage" : "botMessage"
+            }`}
+          >
+            {message.text}
+          </div>
+        ))}
+      </div>
+      <div className="inputContainer">
+        <input
+          type="text"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Ask a question"
+          className="input"
+        />
+        <button onClick={handleSearch} className="button">
+          Send
+        </button>
       </div>
     </div>
   );
