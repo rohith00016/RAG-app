@@ -199,7 +199,7 @@ const generateResponse = async (req, res) => {
     });
     await conversation.save();
 
-    res.json(assistantMessage);
+    res.json({data: assistantMessage});
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: error.message });
