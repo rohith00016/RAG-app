@@ -1,7 +1,7 @@
 const Document = require("../models/Document");
 const fs = require("fs");
-const pdfParser = require("pdf-parse");
-const parser = new pdfParser();
+const PDFParser = require("pdf2json");
+const parser = new PDFParser();
 const axios = require("axios");
 const Conversations = require("../models/Conversations");
 const { MongoClient, ObjectId } = require("mongodb");
@@ -199,7 +199,7 @@ const generateResponse = async (req, res) => {
     });
     await conversation.save();
 
-    res.json({data: assistantMessage});
+    res.json({ data: assistantMessage });
   } catch (error) {
     console.error(error);
     res.status(500).json({ message: error.message });

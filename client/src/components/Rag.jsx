@@ -11,12 +11,11 @@ const RAG = () => {
     setMessages([...messages, { type: "user", text: query }]);
 
     try {
-      const response = await axios.post("http://localhost:3000/api/generate", {
+      const response = await axios.post(`${import.meta.env.VITE_API}/api/generate`, {
         query,
       });
 
-      // Assuming the response has a structure like { success: true, data: "Response text" }
-      const responseText = response.data.data; // Adjust this based on the actual key
+      const responseText = response.data.data; 
 
       setMessages((prevMessages) => [
         ...prevMessages,
